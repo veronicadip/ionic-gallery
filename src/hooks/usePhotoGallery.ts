@@ -17,34 +17,53 @@ export function usePhotoGallery() {
     const [photos, setPhotos] = useState<UserPhoto[]>([]);
 
     const savePicture = async (photo: Photo, fileName: string): Promise<UserPhoto> => {
-        const base64Data = await base64FromPath(photo.webPath!);
+        let base64Data: string | Blob;
+        if (isPlatform('hybrid')) {
+            const file = await Filesystem.readFile({
+                path: photo.path!,
+            });
+            base64Data = file.data;
+        } else {
+            base64Data = await base64FromPath(photo.webPath!);
+        }
         const savedFile = await Filesystem.writeFile({
             path: fileName,
             data: base64Data,
             directory: Directory.Data,
         });
 
-        return {
-            filepath: fileName,
-            webviewPath: photo.webPath,
-        };
+        if (isPlatform('hybrid')) {
+            return {
+                filepath: savedFile.uri,
+                webviewPath: Capacitor.convertFileSrc(savedFile.uri),
+            };
+        } else {
+            return {
+                filepath: fileName,
+                webviewPath: photo.webPath,
+            };
+        }
     };
 
     useEffect(() => {
         const loadSaved = async () => {
             const { value } = await Preferences.get({ key: PHOTO_STORAGE });
-            const photosInPreferences = (value ? JSON.parse(value) : []) as UserPhoto[];
 
-            for (let photo of photosInPreferences) {
-                const file = await Filesystem.readFile({
-                    path: photo.filepath,
-                    directory: Directory.Data,
-                });
-                photo.webviewPath = `data:image/jpeg;base64,${file.data}`;
+            const photosInPreferences = (value ? JSON.parse(value) : []) as UserPhoto[];
+            if (!isPlatform('hybrid')) {
+                for (let photo of photosInPreferences) {
+                    const file = await Filesystem.readFile({
+                        path: photo.filepath,
+                        directory: Directory.Data,
+                    });
+                    photo.webviewPath = `data:image/jpeg;base64,${file.data}`;
+                }
             }
             setPhotos(photosInPreferences);
         };
+
         loadSaved();
+
     }, []);
 
     const takePhoto = async () => {
@@ -61,8 +80,22 @@ export function usePhotoGallery() {
         Preferences.set({ key: PHOTO_STORAGE, value: JSON.stringify(newPhotos) });
     };
 
+    const deletePhoto = async (photo: UserPhoto) => {
+        const newPhotos = photos.filter((p) => p.filepath !== photo.filepath);
+
+        Preferences.set({ key: PHOTO_STORAGE, value: JSON.stringify(newPhotos) });
+
+        // delete photo file from filesystem
+        const filename = photo.filepath.substr(photo.filepath.lastIndexOf('/') + 1);
+        await Filesystem.deleteFile({
+            path: filename,
+            directory: Directory.Data,
+        });
+        setPhotos(newPhotos);
+    };
+
     return {
-        takePhoto, photos
+        takePhoto, photos, deletePhoto
     };
 }
 
